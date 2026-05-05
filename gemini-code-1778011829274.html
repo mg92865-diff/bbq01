@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="BBQ Timer">
+    
+    <title>BBQ Rotation Pro</title>
+
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
+    <style>
+        :root { 
+            --primary: #2196F3; 
+            --bg: #eeeeee; 
+            --surface: #ffffff;
+            --text: #212121; 
+            --danger: #f44336;
+            --success: #4caf50;
+        }
+        
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; 
+            background: var(--bg); 
+            margin: 0; 
+            display: grid;
+            place-items: start center; 
+            min-height: 100vh; /* Changed from height to min-height */
+            overflow-y: auto; /* Allows scrolling to the button if needed */
+        }
+
+        .container { 
+            background: var(--surface); 
+            width: 100%; 
+            max-width: 500px; 
+            /* Removed fixed height to prevent bottom chop */
+            min-height: 100vh;
+            display: grid;
+            grid-template-rows: auto auto 1fr; 
+            box-shadow: 0 0 10px rgba(0,0,0,0.1); 
+        }
+
+        .header-box {
+            display: grid;
+            grid-template-columns: 1fr auto;
+            align-items: center;
+            padding: 10px 20px;
+            border-bottom: 2px solid var(--primary);
+            background: white;
+        }
+
+        .settings-bar {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            padding: 8px 20px;
+            background: #f9f9f9;
+            border-bottom: 1px solid #ddd;
+        }
+
+        .input-group label {
+            font-size: 10px;
+            text-transform: uppercase;
+            color: #666;
+        }
+
+        input { 
+            width: 100%; 
+            padding: 8px; 
+            margin: 2px 0; 
+            border: 1px solid #ccc; 
+            border-radius: 6px; 
+            font-size: 16px; /* Prevents iOS zoom[cite: 1] */
+        }
+
+        #main-content {
+            padding: 15px;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            /* Large bottom buffer to ensure buttons are visible above the shelf */
+            padding-bottom: 80px; 
+        }
+
+        .timer-display { text-align: center; }
+        .label { font-size: 12px; color: #777; }
+        .val { font-size: 3rem; font-weight: bold; color: var(--text); line-height: 1.1; }
+        .cycle-val { color: var(--primary); font-size: 4rem; }
+
+        .button-group {
+            width: 100%;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-top: 10px;
+        }
+
+        .btn { 
+            padding: 16px; 
+            border: none; 
+            border-radius: 8px; 
+            cursor: pointer; 
+            font-weight: bold; 
+            text-transform: uppercase;
+            color: white;
+            font-size: 1rem;
+        }
+        
+        .btn-start { background: var(--success); }
+        .btn-stop { background: var(--danger); }
+        .btn-reset { 
+            grid-column: span 2; 
+            background: #777; 
+            padding: 12px; 
+            font-size: 0.8rem; 
+            margin-top: 5px;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <header class="header-box">
+        <h3 style="margin:0">BBQ Pro</h3>
+        <div id="status-dot" style="width:10px; height:10px; background:#ccc; border-radius:50%"></div>
+    </header>
+
+    <section class="settings-bar">
+        <div class="input-group">
+            <label>Rotate (Min)</label>
+            <input type="number" id="rotateInput" value="5">
+        </div>
+        <div class="input-group">
+            <label>Goal (Min)</label>
+            <input type="number" id="goalInput" value="60">
+        </div>
+    </section>
+
+    <main id="main-content">
+        <div class="timer-display">
+            <div class="label">SESSION TOTAL</div>
+            <div id="totalDisp" class="val">00:00:00</div>
+        </div>
+
+        <div class="timer-display">
+            <div class="label">NEXT ROTATION</div>
+            <div id="rotateDisp" class="val">05:00</div>
+        </div>
+
+        <div class="timer-display">
+            <div class="label">CYCLES</div>
+            <div id="cycleDisp" class="val cycle-val">0</div>
+        </div>
+
+        <div class="button-group">
+            <button class="btn btn-start" onclick="startTimer()">Start</button>
+            <button class="btn btn-stop" onclick="stopTimer()">Stop</button>
+            <button class="btn btn-reset" onclick="resetApp()">Reset Session</button>
+        </div>
+    </main>
+</div>
+
+<script>
+    let totalSeconds = 0;
+    let rotateSeconds = 0;
+    let cycles = 0;
+    let timerInterval = null;
+    let wakeLock = null;
+
+    const rotateInput = document.getElementById('rotateInput');
+    const totalDisp = document.getElementById('totalDisp');
+    const rotateDisp = document.getElementById('rotateDisp');
+    const cycleDisp = document.getElementById('cycleDisp');
+    const statusDot = document.getElementById('status-dot');
+
+    function updateUI() {
+        const h = Math.floor(totalSeconds / 3600).toString().padStart(2, '0');
+        const m = Math.floor((totalSeconds % 3600) / 60).toString().padStart(2, '0');
+        const s = (totalSeconds % 60).toString().padStart(2, '0');
+        totalDisp.innerText = `${h}:${m}:${s}`;
+
+        const rm = Math.floor(rotateSeconds / 60).toString().padStart(2, '0');
+        const rs = (rotateSeconds % 60).toString().padStart(2, '0');
+        rotateDisp.innerText = `${rm}:${rs}`;
+        cycleDisp.innerText = cycles;
+
+        localStorage.setItem('bbq_pwa_v6', JSON.stringify({
+            t: totalSeconds, r: rotateSeconds, c: cycles, i: rotateInput.value
+        }));
+    }
+
+    async function startTimer() {
+        if (timerInterval) return;
+        if (rotateSeconds <= 0) rotateSeconds = rotateInput.value * 60;
+        
+        if ('wakeLock' in navigator) {
+            try { wakeLock = await navigator.wakeLock.request('screen'); } catch (e) {}
+        }
+        statusDot.style.background = 'var(--success)';
+        
+        timerInterval = setInterval(() => {
+            totalSeconds++;
+            rotateSeconds--;
+            if (rotateSeconds <= 0) {
+                cycles++;
+                rotateSeconds = rotateInput.value * 60;
+            }
+            updateUI();
+        }, 1000);
+    }
+
+    function stopTimer() {
+        clearInterval(timerInterval);
+        timerInterval = null;
+        statusDot.style.background = '#ccc';
+        if (wakeLock) { wakeLock.release(); wakeLock = null; }
+    }
+
+    function resetApp() {
+        stopTimer();
+        localStorage.removeItem('bbq_pwa_v6');
+        totalSeconds = 0;
+        cycles = 0;
+        rotateSeconds = rotateInput.value * 60;
+        updateUI();
+    }
+
+    window.onload = () => {
+        const saved = localStorage.getItem('bbq_pwa_v6');
+        if (saved) {
+            const data = JSON.parse(saved);
+            totalSeconds = data.t;
+            rotateSeconds = data.r;
+            cycles = data.c;
+            rotateInput.value = data.i;
+        } else {
+            rotateSeconds = rotateInput.value * 60;
+        }
+        updateUI();
+    };
+</script>
+
+</body>
+</html>
